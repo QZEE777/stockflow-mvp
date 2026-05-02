@@ -13,6 +13,15 @@ _UNIT_NORM = {
     'grams': 'g', 'gram': 'g',
     'boxes': 'box',
     'bottles': 'bottle',
+    'packs': 'pack',
+    'bags': 'bag',
+    'pieces': 'piece',
+    'crates': 'crate',
+    'tins': 'tin',
+    'cans': 'can',
+    'sachets': 'sachet',
+    'dozens': 'dozen',
+    'units': 'unit',
 }
 
 _FILLER = re.compile(
@@ -20,53 +29,67 @@ _FILLER = re.compile(
     re.IGNORECASE
 )
 
-_WITH_UNIT = re.compile(
-    rf'^(\d+(?:\.\d+)?)\s*({"|".join(UNITS)})\s+(.+)$',
+_ITEM_PATTERN = re.compile(
+    rf'(\d+(?:\.\d+)?)\s*({"|".join(UNITS)})?\s+([a-zA-Z][a-zA-Z\s]*?)(?=\s+\d+|$)',
     re.IGNORECASE
 )
 
-_NUMBER_ONLY = re.compile(r'^(\d+(?:\.\d+)?)\s+(.+)$')
+
+def _clean_item(item: str) -> str:
+    item = item.strip().lower()
+    item = re.sub(r'\b(and|plus|also)\b', '', item).strip()
+    return item
+
+
+def _clean_quantity(qty: float):
+    return int(qty) if qty == int(qty) else qty
 
 
 def parse_message(raw_input: str) -> dict:
-    text = _FILLER.sub('', raw_input.strip())
+    text = raw_input.strip().lower()
+    text = _FILLER.sub('', text)
+    text = text.replace(',', ' ')
+    text = re.sub(r'\s+', ' ', text).strip()
 
-    m = _WITH_UNIT.match(text)
-    if m:
-        qty = float(m.group(1))
-        raw_unit = m.group(2).lower()
-        result = {
-            "item": m.group(3).strip().lower(),
-            "quantity": int(qty) if qty == int(qty) else qty,
+    items = []
+
+    for match in _ITEM_PATTERN.finditer(text):
+        qty = float(match.group(1))
+        raw_unit = match.group(2).lower() if match.group(2) else 'unit'
+        item = _clean_item(match.group(3))
+
+        if not item:
+            continue
+
+        items.append({
+            "name": item,
+            "quantity": _clean_quantity(qty),
             "unit": _UNIT_NORM.get(raw_unit, raw_unit),
-            "confidence": 0.9,
-            "raw_input": raw_input,
-        }
+            "confidence": 0.9 if match.group(2) else 0.8,
+        })
 
-    elif _NUMBER_ONLY.match(text):
-        m = _NUMBER_ONLY.match(text)
-        qty = float(m.group(1))
-        result = {
-            "item": m.group(2).strip().lower(),
-            "quantity": int(qty) if qty == int(qty) else qty,
-            "unit": "units",
-            "confidence": 0.8,
-            "raw_input": raw_input,
-        }
+    if not items and " and " in text:
+        parts = [p.strip() for p in text.split(" and ") if p.strip()]
+        for p in parts:
+            items.append({
+                "name": p,
+                "quantity": 1,
+                "unit": "unit",
+                "confidence": 0.6,
+            })
 
-    else:
-        result = {
-            "item": text.strip().lower(),
+    if not items:
+        items.append({
+            "name": text,
             "quantity": 1,
-            "unit": "units",
+            "unit": "unit",
             "confidence": 0.5,
-            "raw_input": raw_input,
-        }
+        })
 
-    if len(result["item"]) <= 1:
-        result["confidence"] = 0.3
-
-    return result
+    return {
+        "items": items,
+        "raw_input": raw_input,
+    }
 
 
 if __name__ == "__main__":
@@ -74,6 +97,8 @@ if __name__ == "__main__":
         "Need 5kg chicken",
         "low on milk",
         "2 boxes eggs",
+        "5 litres milk and 2 boxes eggs",
+        "we need eggs and milk",
     ]
     for msg in tests:
         print(json.dumps(parse_message(msg), indent=2))
