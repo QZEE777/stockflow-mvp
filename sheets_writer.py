@@ -1,9 +1,10 @@
+import os
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timezone
 
-CREDENTIALS_FILE = "credentials.json"  # placeholder — not included in repo
-SPREADSHEET_ID = "YOUR_SPREADSHEET_ID"  # placeholder — set before use
+CREDENTIALS_FILE = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "")
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 HEADERS = ["business_id", "user_phone", "timestamp", "raw_input",
@@ -24,13 +25,15 @@ def _get_sheet(business_id: str):
 
 def write_parsed_result(parsed: dict, business_id: str, user_phone: str) -> None:
     sheet = _get_sheet(business_id)
-    sheet.append_row([
-        business_id,
-        user_phone,
-        datetime.now(timezone.utc).isoformat(),
-        parsed["raw_input"],
-        parsed["item"],
-        parsed["quantity"],
-        parsed["unit"],
-        "pending",
-    ])
+    timestamp = datetime.now(timezone.utc).isoformat()
+    for item in parsed["items"]:
+        sheet.append_row([
+            business_id,
+            user_phone,
+            timestamp,
+            parsed["raw_input"],
+            item["name"],
+            item["quantity"],
+            item["unit"],
+            "pending",
+        ])
