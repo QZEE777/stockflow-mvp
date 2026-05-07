@@ -3,8 +3,6 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timezone
 
-CREDENTIALS_FILE = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
-SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "")
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 HEADERS = ["business_id", "user_phone", "timestamp", "raw_input",
@@ -12,9 +10,11 @@ HEADERS = ["business_id", "user_phone", "timestamp", "raw_input",
 
 
 def _get_sheet(business_id: str):
-    creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPES)
+    credentials_file = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+    spreadsheet_id = os.getenv("SPREADSHEET_ID", "")
+    creds = Credentials.from_service_account_file(credentials_file, scopes=SCOPES)
     client = gspread.authorize(creds)
-    spreadsheet = client.open_by_key(SPREADSHEET_ID)
+    spreadsheet = client.open_by_key(spreadsheet_id)
     try:
         return spreadsheet.worksheet(business_id)
     except gspread.WorksheetNotFound:
