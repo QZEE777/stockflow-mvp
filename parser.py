@@ -25,7 +25,12 @@ _UNIT_NORM = {
 }
 
 _FILLER = re.compile(
-    r'^(need|low on|running low on|out of|we need|please get|get|order|i need)\s+',
+    r'^(need|low on|running low on|out of|we need|please get|get|order|i need|only)\s+',
+    re.IGNORECASE
+)
+
+_TRAILING_FILLER = re.compile(
+    r'\s+\b(left|remaining|please|asap|urgently|urgent)\b.*$',
     re.IGNORECASE
 )
 
@@ -48,6 +53,7 @@ def _clean_quantity(qty: float):
 def parse_message(raw_input: str) -> dict:
     text = raw_input.strip().lower()
     text = _FILLER.sub('', text)
+    text = _TRAILING_FILLER.sub('', text)
     text = text.replace(',', ' ')
     text = re.sub(r'\s+', ' ', text).strip()
 
