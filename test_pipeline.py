@@ -1,5 +1,6 @@
 from unittest.mock import patch, MagicMock
 from parser import parse_message
+from normalizer import normalize_item
 from sheets_writer import write_parsed_result, HEADERS
 
 BUSINESS_ID = "test_business"
@@ -17,7 +18,9 @@ def run_test(label, message, expect_sheet_write, expected_intent=None):
             f"[{label}] Intent mismatch: expected {expected_intent}, got {actual_intent}"
         )
 
-    # Simulate the api.py routing logic
+    # Simulate the api.py routing logic (normalize + filter)
+    for item in items:
+        item["normalized_item"] = normalize_item(item["name"])
     items_to_write = [i for i in items if i.get("intent") != "stock_count"]
 
     mock_sheet = MagicMock()
