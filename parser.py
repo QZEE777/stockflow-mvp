@@ -24,25 +24,48 @@ _UNIT_NORM = {
     'units': 'unit',
 }
 
-# Strip leading filler from the whole message
+# --- Intent detection (applied to raw input before any cleaning) ---
+
+# stock_count: staff reporting what's on hand
+# matches: "only 3 left", "3 black label left", "5 remaining", "we have 3"
+_STOCK_COUNT_PATTERN = re.compile(
+    r'(\b\d+\b.*\b(left|remaining)\b|\bwe have\b.*\b\d+\b)',
+    re.IGNORECASE
+)
+
+# low_stock: staff signalling a need but no specific quantity
+_LOW_STOCK_PATTERN = re.compile(
+    r'\b(low on|running low|almost out of|running out of)\b',
+    re.IGNORECASE
+)
+
+
+def _detect_intent(raw_text: str) -> str:
+    """Detect message intent from the original raw input before cleaning."""
+    if _STOCK_COUNT_PATTERN.search(raw_text):
+        return 'stock_count'
+    if _LOW_STOCK_PATTERN.search(raw_text):
+        return 'low_stock'
+    return 'order_request'
+
+
+# --- Text cleaning ---
+
 _LEADING_FILLER = re.compile(
     r'^(need|low on|running low on|out of|we need|please get|get|order|i need|only)\s+',
     re.IGNORECASE
 )
 
-# Strip trailing stock-state words from the whole message
 _TRAILING_FILLER = re.compile(
     r'\s+\b(left|remaining|needed|please|asap|urgently|urgent)\b.*$',
     re.IGNORECASE
 )
 
-# Strip leading item-level filler from individual segments
 _SEGMENT_LEADING = re.compile(
     r'^(more|some|a few|few|a bit of|any|some more|need more|need)\s+',
     re.IGNORECASE
 )
 
-# Strip trailing stock-state words from individual segments
 _SEGMENT_TRAILING = re.compile(
     r'\s+\b(left|remaining|needed|please|asap|urgently|urgent)\b\s*$',
     re.IGNORECASE
@@ -55,7 +78,6 @@ _ITEM_PATTERN = re.compile(
 
 
 def _clean_segment(seg: str) -> str:
-    """Clean an individual item segment — strip leading and trailing filler."""
     seg = seg.strip().lower()
     seg = _SEGMENT_LEADING.sub('', seg)
     seg = _SEGMENT_TRAILING.sub('', seg)
@@ -66,16 +88,8 @@ def _clean_segment(seg: str) -> str:
 
 def _expand_variants(segments: list) -> list:
     """
-    Expand variant patterns where a single trailing word describes a variant
-    of the previous multi-word item.
-
-    Example:
-      ['sugar sachets white', 'brown']
-      → ['sugar sachets white', 'sugar sachets brown']
-
-    Rule: if segment[i] has 2+ words and segment[i+1] is a single word,
-    treat segment[i+1] as a variant — prepend segment[i]'s base (all words
-    except the last) to it.
+    Expand variant patterns.
+    e.g. ['sugar sachets white', 'brown'] -> ['sugar sachets white', 'sugar sachets brown']
     """
     result = []
     i = 0
@@ -101,6 +115,12 @@ def _clean_quantity(qty: float):
 
 
 def parse_message(raw_input: str) -> dict:
+    # Detect intent from the original text before any cleaning
+    intent = _detect_intent(raw_input)
+
+    # Confidence floor for low_stock: quantity is assumed, not stated
+    low_stock_confidence = 0.4
+
     text = raw_input.strip().lower()
     text = _LEADING_FILLER.sub('', text)
     text = _TRAILING_FILLER.sub('', text)
@@ -119,11 +139,16 @@ def parse_message(raw_input: str) -> dict:
         if not item_name:
             continue
 
+        confidence = 0.9 if match.group(2) else 0.8
+        if intent == 'low_stock':
+            confidence = low_stock_confidence
+
         items.append({
             "name": item_name,
             "quantity": _clean_quantity(qty),
             "unit": _UNIT_NORM.get(raw_unit, raw_unit),
-            "confidence": 0.9 if match.group(2) else 0.8,
+            "confidence": confidence,
+            "intent": intent,
         })
 
     if not items and " and " in text:
@@ -133,20 +158,24 @@ def parse_message(raw_input: str) -> dict:
         expanded = _expand_variants(cleaned)
         for p in expanded:
             if p:
+                confidence = low_stock_confidence if intent == 'low_stock' else 0.6
                 items.append({
                     "name": p,
                     "quantity": 1,
                     "unit": "unit",
-                    "confidence": 0.6,
+                    "confidence": confidence,
+                    "intent": intent,
                 })
 
     if not items:
         fallback = _clean_segment(text)
+        confidence = low_stock_confidence if intent == 'low_stock' else 0.5
         items.append({
             "name": fallback or text,
             "quantity": 1,
             "unit": "unit",
-            "confidence": 0.5,
+            "confidence": confidence,
+            "intent": intent,
         })
 
     return {
@@ -157,31 +186,36 @@ def parse_message(raw_input: str) -> dict:
 
 if __name__ == "__main__":
     tests = [
+        # (message, expected [(name, qty, unit, intent)])
         ("Need 5kg chicken",
-         [("chicken", 5, "kg")]),
+         [("chicken", 5, "kg", "order_request")]),
         ("low on milk",
-         [("milk", 1, "unit")]),
+         [("milk", 1, "unit", "low_stock")]),
         ("2 boxes eggs",
-         [("eggs", 2, "box")]),
+         [("eggs", 2, "box", "order_request")]),
         ("5 litres milk and 2 boxes eggs",
-         [("milk", 5, "l"), ("eggs", 2, "box")]),
+         [("milk", 5, "l", "order_request"), ("eggs", 2, "box", "order_request")]),
         ("we need eggs and milk",
-         [("eggs", 1, "unit"), ("milk", 1, "unit")]),
+         [("eggs", 1, "unit", "order_request"), ("milk", 1, "unit", "order_request")]),
         ("Need more coffee and sugar sachets white and brown",
-         [("coffee", 1, "unit"), ("sugar sachets white", 1, "unit"), ("sugar sachets brown", 1, "unit")]),
+         [("coffee", 1, "unit", "order_request"),
+          ("sugar sachets white", 1, "unit", "order_request"),
+          ("sugar sachets brown", 1, "unit", "order_request")]),
         ("Only 3 black label left",
-         [("black label", 3, "unit")]),
+         [("black label", 3, "unit", "stock_count")]),
+        ("Need 7 black labels",
+         [("black labels", 7, "unit", "order_request")]),
         ("Low on Jamison",
-         [("jamison", 1, "unit")]),
+         [("jamison", 1, "unit", "low_stock")]),
         ("order more coffee",
-         [("coffee", 1, "unit")]),
+         [("coffee", 1, "unit", "order_request")]),
     ]
 
     passed = 0
     failed = 0
     for msg, expected in tests:
         result = parse_message(msg)
-        actual = [(i["name"], i["quantity"], i["unit"]) for i in result["items"]]
+        actual = [(i["name"], i["quantity"], i["unit"], i["intent"]) for i in result["items"]]
         ok = actual == expected
         status = "PASS" if ok else "FAIL"
         print(f"{status} '{msg}'")
